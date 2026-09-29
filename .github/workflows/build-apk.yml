@@ -1,5 +1,5 @@
 
-name: AHZA ASISTANT APK Builder
+name: AHZA ASISTANT APK + EXE Builder
 
 on:
   workflow_dispatch:
@@ -11,16 +11,12 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build AHZA APK
+  android:
+    name: Build AHZA Android APK
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: ./app
-
     steps:
-      - name: Checkout source
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -35,25 +31,102 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Check Flutter project
+      - name: Extract New Build Pack
         run: |
-          ls -la
-          test -f pubspec.yaml
+          mkdir -p source
+          unzip -o AHZA-ASISTANT-APK-EXE-BUILD-PACK.zip -d source
 
-      - name: Generate Android platform
+      - name: Find Flutter Project
         run: |
+          PROJECT=$(find source -name pubspec.yaml -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: pubspec.yaml tidak ditemukan!"
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$(dirname "$PROJECT")" >> "$GITHUB_ENV"
+
+      - name: Generate Android
+        run: |
+          cd "$PROJECT_DIR"
           flutter create --platforms=android .
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Install Dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build Release APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter build apk --release
 
-      - name: Upload APK
+      - name: Rename APK
+        run: |
+          cp "$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk" AHZA-ASISTANT.apk
+
+      - name: Upload Final APK
         uses: actions/upload-artifact@v4
         with:
           name: AHZA-ASISTANT-APK
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          path: AHZA-ASISTANT.apk
           if-no-files-found: error
-          retention-days: 30
+
+  windows:
+    name: Build AHZA Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Extract New Build Pack
+        shell: pwsh
+        run: |
+          Expand-Archive `
+            -Path AHZA-ASISTANT-APK-EXE-BUILD-PACK.zip `
+            -DestinationPath source `
+            -Force
+
+      - name: Find Flutter Project
+        shell: pwsh
+        run: |
+          $project = Get-ChildItem source -Filter pubspec.yaml -Recurse |
+            Select-Object -First 1
+
+          if (-not $project) {
+            throw "pubspec.yaml tidak ditemukan!"
+          }
+
+          "PROJECT_DIR=$($project.Directory.FullName)" >> $env:GITHUB_ENV
+
+      - name: Generate Windows
+        run: flutter create --platforms=windows .
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Package EXE
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path build/windows/x64/runner/Release/* `
+            -DestinationPath AHZA-ASISTANT-WINDOWS.zip `
+            -Force
+
+      - name: Upload Windows App
+        uses: actions/upload-artifact@v4
+        with:
+          name: AHZA-ASISTANT-WINDOWS
+          path: AHZA-ASISTANT-WINDOWS.zip
+          if-no-files-found: error
