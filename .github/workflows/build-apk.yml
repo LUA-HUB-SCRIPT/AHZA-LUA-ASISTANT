@@ -11,6 +11,7 @@ permissions:
   contents: read
 
 jobs:
+
   android:
     name: Build AHZA Android APK
     runs-on: ubuntu-latest
@@ -31,26 +32,42 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract New Build Pack
+      - name: Extract Source ZIP
         run: |
           mkdir -p source
-          unzip -o AHZA-ASISTANT-APK-EXE-BUILD-PACK.zip -d source
+
+          for file in ./*.zip; do
+            if [ -f "$file" ]; then
+              unzip -o "$file" -d source
+            fi
+          done
 
       - name: Find Flutter Project
+        shell: bash
         run: |
-          PROJECT=$(find source -name pubspec.yaml -print -quit)
+          PROJECT=$(find . -name pubspec.yaml \
+            -not -path './.git/*' \
+            -not -path './.dart_tool/*' \
+            -print -quit)
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: pubspec.yaml tidak ditemukan!"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$(dirname "$PROJECT")" >> "$GITHUB_ENV"
+          DIR=$(dirname "$PROJECT")
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
 
-      - name: Generate Android
+          echo "Project ditemukan: $DIR"
+
+      - name: Fix Dart Package Name
+        run: |
+          sed -i 's/^name:.*/name: ahza_lua_asistant/' "$PROJECT_DIR/pubspec.yaml"
+
+      - name: Generate Android Platform
         run: |
           cd "$PROJECT_DIR"
-          flutter create --platforms=android .
+          flutter create --project-name ahza_lua_asistant --platforms=android .
 
       - name: Install Dependencies
         run: |
@@ -66,12 +83,13 @@ jobs:
         run: |
           cp "$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk" AHZA-ASISTANT.apk
 
-      - name: Upload Final APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: AHZA-ASISTANT-APK
           path: AHZA-ASISTANT.apk
           if-no-files-found: error
+          retention-days: 30
 
   windows:
     name: Build AHZA Windows EXE
@@ -87,46 +105,92 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract New Build Pack
+      - name: Extract Source ZIP
         shell: pwsh
         run: |
-          Expand-Archive `
-            -Path AHZA-ASISTANT-APK-EXE-BUILD-PACK.zip `
-            -DestinationPath source `
-            -Force
+          New-Item -ItemType Directory -Force -Path source | Out-Null
+
+          Get-ChildItem -Path . -Filter *.zip | ForEach-Object {
+            Expand-Archive -Path $_.FullName -DestinationPath source -Force
+          }
 
       - name: Find Flutter Project
         shell: pwsh
         run: |
-          $project = Get-ChildItem source -Filter pubspec.yaml -Recurse |
+          $project = Get-ChildItem -Path . -Filter pubspec.yaml -Recurse |
+            Where-Object { $_.FullName -notmatch '\\.git\\|\\.dart_tool\\' } |
             Select-Object -First 1
 
           if (-not $project) {
-            throw "pubspec.yaml tidak ditemukan!"
+            throw "ERROR: pubspec.yaml tidak ditemukan!"
           }
 
-          "PROJECT_DIR=$($project.Directory.FullName)" >> $env:GITHUB_ENV
+          $dir = $project.Directory.FullName
 
-      - name: Generate Windows
-        run: flutter create --platforms=windows .
+          "PROJECT_DIR=$dir" >> $env:GITHUB_ENV
 
-      - name: Install Dependencies
-        run: flutter pub get
+          Write-Host "Flutter project: $dir"
 
-      - name: Build Windows Release
-        run: flutter build windows --release
-
-      - name: Package EXE
+      - name: Fix Dart Package Name
         shell: pwsh
         run: |
+          $file = Join-Path $env:PROJECT_DIR "pubspec.yaml"
+
+          $content = Get-Content $file -Raw
+          $content = [regex]::Replace(
+            $content,
+            '(?m)^name:\s*.*$',
+            'name: ahza_lua_asistant'
+          )
+
+          Set-Content -Path $file -Value $content -Encoding utf8
+
+      - name: Generate Windows Platform
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+
+          flutter create `
+            --project-name ahza_lua_asistant `
+            --platforms=windows .
+
+      - name: Install Dependencies
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          flutter pub get
+
+      - name: Build Windows Release
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          flutter build windows --release
+
+      - name: Package Windows Application
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:PROJECT_DIR "build/windows/x64/runner/Release"
+
+          if (-not (Test-Path $release)) {
+            throw "Windows Release folder tidak ditemukan!"
+          }
+
+          $exe = Get-ChildItem $release -Filter *.exe |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "EXE tidak ditemukan!"
+          }
+
           Compress-Archive `
-            -Path build/windows/x64/runner/Release/* `
+            -Path "$release/*" `
             -DestinationPath AHZA-ASISTANT-WINDOWS.zip `
             -Force
 
-      - name: Upload Windows App
+      - name: Upload Windows Application
         uses: actions/upload-artifact@v4
         with:
           name: AHZA-ASISTANT-WINDOWS
           path: AHZA-ASISTANT-WINDOWS.zip
           if-no-files-found: error
+          retention-days: 30
